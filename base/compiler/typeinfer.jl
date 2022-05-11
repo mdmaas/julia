@@ -204,6 +204,7 @@ const __measure_typeinf__ = fill(false)
 
 # Wrapper around _typeinf that optionally records the exclusive time for each invocation.
 function typeinf(interp::AbstractInterpreter, frame::InferenceState)
+    ccall(:jl_typeinf_begin, Cvoid, ())
     if __measure_typeinf__[]
         Timings.enter_new_timer(frame)
         v = _typeinf(interp, frame)
@@ -212,6 +213,7 @@ function typeinf(interp::AbstractInterpreter, frame::InferenceState)
     else
         return _typeinf(interp, frame)
     end
+    ccall(:jl_typeinf_end, Cvoid, ())
 end
 
 function finish!(interp::AbstractInterpreter, caller::InferenceResult)

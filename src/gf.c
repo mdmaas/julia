@@ -3320,32 +3320,33 @@ int jl_has_concrete_subtype(jl_value_t *typ)
     return ((jl_datatype_t*)typ)->has_concrete_subtype;
 }
 
-// TODO: separate the codegen and typeinf locks
-//   currently using a coarser lock seems like
-//   the best way to avoid acquisition priority
-//   ordering violations
-//static jl_mutex_t typeinf_lock;
-#define typeinf_lock jl_codegen_lock
-
+static jl_mutex_t typeinf_timing_mutex;
+static uint64_t typeinf_reentrances = 0;
 static uint64_t inference_start_time = 0;
-static uint8_t inference_is_measuring_compile_time = 0;
+static _Atomic(uint8_t) inference_is_measuring_compile_time = 0;
 
 JL_DLLEXPORT void jl_typeinf_begin(void)
 {
-    JL_LOCK(&typeinf_lock);
     if (jl_atomic_load_relaxed(&jl_measure_compile_time_enabled)) {
-        inference_start_time = jl_hrtime();
-        inference_is_measuring_compile_time = 1;
+        JL_LOCK_NOGC(&typeinf_timing_mutex);
+        if (typeinf_reentrances++ == 0) {
+            inference_start_time = jl_hrtime();
+            jl_atomic_store_relaxed(&inference_is_measuring_compile_time, 1);
+        }
+        JL_UNLOCK_NOGC(&typeinf_timing_mutex);
     }
 }
 
 JL_DLLEXPORT void jl_typeinf_end(void)
 {
-    if (typeinf_lock.count == 1 && inference_is_measuring_compile_time) {
-        jl_atomic_fetch_add_relaxed(&jl_cumulative_compile_time, (jl_hrtime() - inference_start_time));
-        inference_is_measuring_compile_time = 0;
+    if (jl_atomic_load_relaxed(&inference_is_measuring_compile_time)) {
+        JL_LOCK_NOGC(&typeinf_timing_mutex);
+        if (jl_atomic_load_relaxed(&inference_is_measuring_compile_time) && --typeinf_reentrances == 0) {
+            jl_atomic_fetch_add_relaxed(&jl_cumulative_compile_time, (jl_hrtime() - inference_start_time));
+            jl_atomic_store_relaxed(&inference_is_measuring_compile_time, 0);
+        }
+        JL_UNLOCK_NOGC(&typeinf_timing_mutex);
     }
-    JL_UNLOCK(&typeinf_lock);
 }
 
 #ifdef __cplusplus
