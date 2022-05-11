@@ -97,6 +97,7 @@ static htable_t external_mis;
 // Inference tracks newly-inferred MethodInstances during precompilation
 // and registers them by calling jl_set_newly_inferred
 static jl_array_t *newly_inferred JL_GLOBALLY_ROOTED;
+static jl_mutex_t newly_inferred_mutex;
 
 // New roots to add to Methods. These can't be added until after
 // recaching is complete, so we have to hold on to them separately
@@ -2613,8 +2614,10 @@ JL_DLLEXPORT void jl_init_restored_modules(jl_array_t *init_order)
 // This gets called as the final step of Base.include_package_for_output
 JL_DLLEXPORT void jl_set_newly_inferred(jl_value_t* _newly_inferred)
 {
+    JL_LOCK_NOGC(&newly_inferred_mutex);
     assert(_newly_inferred == NULL || jl_is_array(_newly_inferred));
     newly_inferred = (jl_array_t*) _newly_inferred;
+    JL_UNLOCK_NOGC(&newly_inferred_mutex);
 }
 
 // Serialize the modules in `worklist` to file `fname`
@@ -2648,6 +2651,7 @@ JL_DLLEXPORT int jl_save_incremental(const char *fname, jl_array_t *worklist)
     arraylist_new(&reinit_list, 0);
     htable_new(&edges_map, 0);
     htable_new(&backref_table, 5000);
+    JL_LOCK(&newly_inferred_mutex);
     htable_new(&external_mis, newly_inferred ? jl_array_len(newly_inferred) : 0);
     ptrhash_put(&backref_table, jl_main_module, (char*)HT_NOTFOUND + 1);
     backref_table_numel = 1;
@@ -2659,12 +2663,13 @@ JL_DLLEXPORT int jl_save_incremental(const char *fname, jl_array_t *worklist)
                                                     jl_symbol("BITS_PER_LIMB"))) / 8;
     }
 
+    int n_ext_mis = queue_external_mis(newly_inferred);
+    JL_UNLOCK(&newly_inferred_mutex);
+
     int en = jl_gc_enable(0); // edges map is not gc-safe
     jl_array_t *extext_methods = jl_alloc_vec_any(0);  // [method1, simplesig1, ...], worklist-owned "extending external" methods added to functions owned by modules outside the worklist
     jl_array_t *ext_targets = jl_alloc_vec_any(0);     // [callee1, matches1, ...] non-worklist callees of worklist-owned methods
     jl_array_t *edges = jl_alloc_vec_any(0);           // [caller1, ext_targets_indexes1, ...] for worklist-owned methods calling external methods
-
-    int n_ext_mis = queue_external_mis(newly_inferred);
 
     size_t i;
     size_t len = jl_array_len(mod_array);
