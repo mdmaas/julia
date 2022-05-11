@@ -97,6 +97,7 @@ static htable_t external_mis;
 // Inference tracks newly-inferred MethodInstances during precompilation
 // and registers them by calling jl_set_newly_inferred
 static jl_array_t *newly_inferred JL_GLOBALLY_ROOTED;
+static _Atomic(int) track_newly_inferred;
 static jl_mutex_t newly_inferred_mutex;
 
 // New roots to add to Methods. These can't be added until after
@@ -2617,7 +2618,27 @@ JL_DLLEXPORT void jl_set_newly_inferred(jl_value_t* _newly_inferred)
     JL_LOCK_NOGC(&newly_inferred_mutex);
     assert(_newly_inferred == NULL || jl_is_array(_newly_inferred));
     newly_inferred = (jl_array_t*) _newly_inferred;
+    jl_atomic_fetch_add(&track_newly_inferred, 1);
     JL_UNLOCK_NOGC(&newly_inferred_mutex);
+}
+
+JL_DLLEXPORT void jl_log_inferred(jl_value_t *linfo) {
+    //Test-and-lock-and-test
+    //Finalizers are run on JL_LOCK/UNLOCK, which is
+    //why this pattern is useful here
+    if (jl_atomic_load_acquire(&track_newly_inferred)) {
+        JL_LOCK(&newly_inferred_mutex);
+        //Might have stopped tracking between when we first checked
+        //and when we actually acquired the lock
+        if (jl_atomic_load_relaxed(&track_newly_inferred)) {
+            jl_array_ptr_1d_push(newly_inferred, linfo);
+        }
+        JL_UNLOCK(&newly_inferred_mutex);
+    }
+}
+JL_DLLEXPORT void jl_untrack_inferred(void)
+{
+    jl_atomic_fetch_add(&track_newly_inferred, -1);
 }
 
 // Serialize the modules in `worklist` to file `fname`
