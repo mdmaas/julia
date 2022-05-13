@@ -2616,7 +2616,7 @@ JL_DLLEXPORT void jl_init_restored_modules(jl_array_t *init_order)
 JL_DLLEXPORT void jl_set_newly_inferred(jl_value_t* _newly_inferred)
 {
     JL_LOCK_NOGC(&newly_inferred_mutex);
-    assert(_newly_inferred == NULL || jl_is_array(_newly_inferred));
+    assert(_newly_inferred == NULL || (jl_is_array(_newly_inferred)));
     newly_inferred = (jl_array_t*) _newly_inferred;
     jl_atomic_fetch_add(&track_newly_inferred, 1);
     JL_UNLOCK_NOGC(&newly_inferred_mutex);
@@ -2631,7 +2631,11 @@ JL_DLLEXPORT void jl_log_inferred(jl_value_t *linfo) {
         //Might have stopped tracking between when we first checked
         //and when we actually acquired the lock
         if (jl_atomic_load_relaxed(&track_newly_inferred)) {
-            jl_array_ptr_1d_push(newly_inferred, linfo);
+            assert(newly_inferred && jl_is_array(newly_inferred)
+                && jl_isa(linfo, jl_tparam0(jl_typeof(newly_inferred))));
+            size_t end = jl_array_len(newly_inferred);
+            jl_array_grow_end(newly_inferred, 1);
+            jl_arrayset(newly_inferred, linfo, end);
         }
         JL_UNLOCK(&newly_inferred_mutex);
     }
